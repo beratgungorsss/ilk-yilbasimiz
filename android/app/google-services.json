@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "849678696768",
+    "project_id": "ilkyilbasimiz",
+    "storage_bucket": "ilkyilbasimiz.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:849678696768:android:270cd50fd47e6beb783aa5",
+        "android_client_info": {
+          "package_name": "com.example.ilkyilbasimiz"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB8ofYan8FXZdFPE-NbCu4SHvlAn3wmiiM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
