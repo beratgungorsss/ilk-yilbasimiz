@@ -312,8 +312,16 @@ class _KokinaHomeState extends State<KokinaHome> with SingleTickerProviderStateM
 // GALLERY PAGE - Firebase Storage URL'leri ile fotoğraf gösterimi
 // ═══════════════════════════════════════════════════════════════════════════
 
-class GalleryPage extends StatelessWidget {
+class GalleryPage extends StatefulWidget {
   const GalleryPage({super.key});
+
+  @override
+  State<GalleryPage> createState() => _GalleryPageState();
+}
+
+class _GalleryPageState extends State<GalleryPage> {
+  // Çift yükleme önleme kilidi
+  bool _isUploading = false;
 
   @override
   Widget build(BuildContext context) {
@@ -393,7 +401,11 @@ class GalleryPage extends StatelessWidget {
           );
         },
       ),
-      floatingActionButton: FloatingActionButton(onPressed: () => _pickAndUploadImage(context), backgroundColor: const Color(0xFFE11D48), child: const Icon(Icons.add_a_photo)),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _isUploading ? null : () => _pickAndUploadImages(),
+        backgroundColor: _isUploading ? Colors.grey : const Color(0xFFE11D48),
+        child: _isUploading ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.add_a_photo),
+      ),
     );
   }
 
@@ -434,51 +446,165 @@ class GalleryPage extends StatelessWidget {
     );
   }
 
-  /// Firebase Storage'a yükle, URL'i Firestore'a kaydet
-  Future<void> _pickAndUploadImage(BuildContext context) async {
+  /// Firebase Storage'a çoklu fotoğraf yükle, URL'leri Firestore'a kaydet
+  Future<void> _pickAndUploadImages() async {
+    // Kilitleme kontrolü - çift gönderimi önle
+    if (_isUploading) return;
+    
     final ImagePicker picker = ImagePicker();
+    List<XFile> selectedImages = [];
     
     try {
-      final XFile? image = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1280, imageQuality: 70);
-      if (image == null) return;
+      // Çoklu fotoğraf seçimi
+      selectedImages = await picker.pickMultiImage(maxWidth: 1280, imageQuality: 70);
+      if (selectedImages.isEmpty) return;
 
-      if (context.mounted) {
-        showDialog(context: context, barrierDismissible: false, builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFE11D48))));
-      }
+      // Kilidi aç
+      setState(() => _isUploading = true);
 
-      // Benzersiz dosya adı oluştur
-      final String fileName = 'anlar/${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final Reference storageRef = FirebaseStorage.instance.ref().child(fileName);
+      final int totalImages = selectedImages.length;
+      int uploadedCount = 0;
+      int successCount = 0;
+      int failCount = 0;
 
-      // Platforma göre yükle
-      if (kIsWeb) {
-        final bytes = await image.readAsBytes();
-        await storageRef.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
-      } else {
-        await storageRef.putFile(File(image.path));
-      }
+      // İlerleme dialog'u
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => StatefulBuilder(
+            builder: (_, setDialogState) {
+              // Upload işlemini başlat (sadece bir kez)
+              if (uploadedCount == 0 && successCount == 0 && failCount == 0) {
+                _uploadImagesWithErrorHandling(
+                  selectedImages,
+                  onProgress: (current, success, fail) {
+                    if (dialogContext.mounted) {
+                      setDialogState(() {
+                        uploadedCount = current;
+                        successCount = success;
+                        failCount = fail;
+                      });
+                    }
+                  },
+                  onComplete: (success, fail) {
+                    // Dialog'u kapat
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                    
+                    // Kilidi kaldır
+                    if (mounted) setState(() => _isUploading = false);
+                    
+                    // Sonuç mesajı göster
+                    if (mounted) {
+                      String message;
+                      Color bgColor;
+                      if (fail == 0) {
+                        message = '$success anı başarıyla eklendi! 💕';
+                        bgColor = const Color(0xFFE11D48);
+                      } else if (success == 0) {
+                        message = 'Hiçbir fotoğraf yüklenemedi 😢';
+                        bgColor = Colors.red;
+                      } else {
+                        message = '$success fotoğraf yüklendi, $fail tanesi başarısız oldu.';
+                        bgColor = Colors.orange;
+                      }
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), backgroundColor: bgColor));
+                    }
+                  },
+                );
+              }
 
-      // Download URL al
-      final String downloadUrl = await storageRef.getDownloadURL();
-
-      // Firestore'a kaydet (URL ve Storage path)
-      await FirebaseFirestore.instance.collection('fotograflar').add({
-        'url': downloadUrl,
-        'storagePath': fileName,
-        'yuklenmeTarihi': FieldValue.serverTimestamp(),
-        'yukleyenKullanici': FirebaseAuth.instance.currentUser?.email,
-      });
-
-      if (context.mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Anı başarıyla eklendi! 💕'), backgroundColor: Color(0xFFE11D48)));
+              return AlertDialog(
+                backgroundColor: const Color(0xFF1F2937),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: Color(0xFFE11D48)),
+                    const SizedBox(height: 20),
+                    Text(
+                      '$uploadedCount / $totalImages fotoğraf yükleniyor...',
+                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                    if (failCount > 0) ...[
+                      const SizedBox(height: 4),
+                      Text('($failCount başarısız)', style: TextStyle(color: Colors.orange.shade300, fontSize: 12)),
+                    ],
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: totalImages > 0 ? uploadedCount / totalImages : 0,
+                      backgroundColor: Colors.white24,
+                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE11D48)),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
       }
     } catch (e) {
-      if (context.mounted) {
-        Navigator.pop(context);
+      // Hata durumunda kilidi kaldır
+      if (mounted) setState(() => _isUploading = false);
+      
+      // Seçilen resimleri temizle
+      selectedImages.clear();
+      
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e'), backgroundColor: Colors.red));
       }
     }
+  }
+
+  /// Fotoğrafları sırayla yükle - hata toleransı ile
+  Future<void> _uploadImagesWithErrorHandling(
+    List<XFile> images, {
+    required void Function(int current, int success, int fail) onProgress,
+    required void Function(int success, int fail) onComplete,
+  }) async {
+    int successCount = 0;
+    int failCount = 0;
+
+    for (int i = 0; i < images.length; i++) {
+      try {
+        final image = images[i];
+        
+        // Benzersiz dosya adı oluştur
+        final String fileName = 'anlar/${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
+        final Reference storageRef = FirebaseStorage.instance.ref().child(fileName);
+
+        // Platforma göre yükle
+        if (kIsWeb) {
+          final bytes = await image.readAsBytes();
+          await storageRef.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+        } else {
+          await storageRef.putFile(File(image.path));
+        }
+
+        // Download URL al
+        final String downloadUrl = await storageRef.getDownloadURL();
+
+        // Firestore'a kaydet (URL ve Storage path)
+        await FirebaseFirestore.instance.collection('fotograflar').add({
+          'url': downloadUrl,
+          'storagePath': fileName,
+          'yuklenmeTarihi': FieldValue.serverTimestamp(),
+          'yukleyenKullanici': FirebaseAuth.instance.currentUser?.email,
+        });
+
+        successCount++;
+      } catch (e) {
+        // Hata olursa bu fotoğrafı atla, döngüye devam et
+        failCount++;
+        debugPrint('Fotoğraf yüklenemedi (${i + 1}): $e');
+      }
+
+      // İlerlemeyi bildir
+      onProgress(i + 1, successCount, failCount);
+    }
+
+    // Tamamlandı
+    onComplete(successCount, failCount);
   }
 }
 
